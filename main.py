@@ -26,19 +26,45 @@ def setup_logging(verbose: bool = False, log_file: str = None):
     """
     level = logging.DEBUG if verbose else getattr(logging, LOG_LEVEL.upper())
 
-    # Konfiguracja podstawowa
-    handlers = [logging.StreamHandler(sys.stdout)]
+    # Usuń istniejące handlery żeby uniknąć duplikatów
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+
+    # Konfiguracja podstawowa - handler konsoli
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(level)
+    console_formatter = logging.Formatter(LOG_FORMAT)
+    console_handler.setFormatter(console_formatter)
+
+    # Lista handlerów
+    handlers = [console_handler]
 
     # Dodaj handler pliku jeśli podano
     if log_file:
-        log_path = Path(LOGS_DIR) / log_file
-        handlers.append(logging.FileHandler(log_path, encoding='utf-8'))
+        # Upewnij się, że katalog logs istnieje
+        logs_path = Path(LOGS_DIR)
+        logs_path.mkdir(exist_ok=True)
 
-    logging.basicConfig(
-        level=level,
-        format=LOG_FORMAT,
-        handlers=handlers
-    )
+        log_file_path = logs_path / log_file
+
+        try:
+            file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
+            file_handler.setLevel(level)
+            file_formatter = logging.Formatter(LOG_FORMAT)
+            file_handler.setFormatter(file_formatter)
+            handlers.append(file_handler)
+
+            # Informuj użytkownika o lokalizacji pliku
+            print(f"Logi będą zapisywane do: {log_file_path.absolute()}")
+
+        except Exception as e:
+            print(f"Ostrzeżenie: Nie można utworzyć pliku logów {log_file_path}: {e}")
+            print("Kontynuuję tylko z logowaniem do konsoli.")
+
+    # Konfiguruj logger podstawowy z handlerami
+    root_logger.setLevel(level)
+    for handler in handlers:
+        root_logger.addHandler(handler)
 
 
 def print_banner():
@@ -48,7 +74,7 @@ def print_banner():
 ║                        SejmBotScraper                        ║
 ║                                                              ║
 ║          Narzędzie do pobierania stenogramów Sejmu RP        ║
-║                     Wersja 1.0                               ║
+║                         Wersja 1.0.1                         ║
 ╚══════════════════════════════════════════════════════════════╝
     """
     print(banner)
@@ -126,7 +152,7 @@ Przykłady użycia:
 
     args = parser.parse_args()
 
-    # Konfiguruj logowanie
+    # Konfiguruj logowanie przed jakąkolwiek operacją
     setup_logging(args.verbose, args.log_file)
 
     # Wyświetl banner
@@ -158,14 +184,20 @@ Przykłady użycia:
                 print("-" * 60)
                 for proc in summary:
                     current = " [TRWA]" if proc.get('current') else ""
+                    future = " [PRZYSZŁE]" if proc.get('is_future') else ""
                     dates_str = ", ".join(proc['dates']) if proc['dates'] else "brak dat"
-                    print(f"Posiedzenie {proc['number']:3d}: {dates_str}{current}")
+                    print(f"Posiedzenie {proc['number']:3d}: {dates_str}{current}{future}")
                     if proc.get('title'):
                         print(f"    Tytuł: {proc['title'][:80]}{'...' if len(proc['title']) > 80 else ''}")
                     print()
             else:
                 print(f"Nie można pobrać informacji o posiedzeniach kadencji {args.term}.")
             return
+
+        # Walidacja parametrów przed głównym procesem
+        if args.proceeding is not None and args.proceeding <= 0:
+            print(f"Błąd: Numer posiedzenia musi być większy niż 0 (podano: {args.proceeding})")
+            sys.exit(1)
 
         # Główny proces scrapowania
         logging.info("Rozpoczynanie procesu pobierania stenogramów...")
@@ -194,6 +226,7 @@ Przykłady użycia:
             print(f"\n📊 PODSUMOWANIE POBIERANIA KADENCJI {args.term}")
             print("=" * 50)
             print(f"Przetworzone posiedzenia: {stats['proceedings_processed']}")
+            print(f"Pominięte przyszłe posiedzenia: {stats.get('future_proceedings_skipped', 0)}")
             print(f"Pobrane PDF-y:           {stats['pdfs_downloaded']}")
             print(f"Zapisane wypowiedzi:     {stats['statements_saved']}")
             print(f"Błędy:                   {stats['errors']}")
@@ -201,6 +234,7 @@ Przykłady użycia:
 
             if stats['errors'] > 0:
                 print(f"⚠️  Proces zakończony z {stats['errors']} błędami. Sprawdź logi.")
+                sys.exit(1)
             else:
                 print("✅ Proces zakończony pomyślnie!")
 

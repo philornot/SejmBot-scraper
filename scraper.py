@@ -4,6 +4,7 @@ Główna logika scrapowania stenogramów Sejmu RP
 """
 
 import logging
+from datetime import datetime, date
 from typing import List, Dict, Optional
 
 from config import DEFAULT_TERM
@@ -23,8 +24,44 @@ class SejmScraper:
             'proceedings_processed': 0,
             'pdfs_downloaded': 0,
             'statements_saved': 0,
-            'errors': 0
+            'errors': 0,
+            'future_proceedings_skipped': 0
         }
+
+    def _is_date_in_future(self, date_str: str) -> bool:
+        """
+        Sprawdza czy data jest w przyszłości
+
+        Args:
+            date_str: data w formacie YYYY-MM-DD
+
+        Returns:
+            True jeśli data jest w przyszłości
+        """
+        try:
+            proceeding_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            today = date.today()
+            return proceeding_date > today
+        except ValueError:
+            logger.warning(f"Nieprawidłowy format daty: {date_str}")
+            return False
+
+    def _should_skip_future_proceeding(self, proceeding_dates: List[str]) -> bool:
+        """
+        Sprawdza czy posiedzenie jest w przyszłości i powinno być pominięte
+
+        Args:
+            proceeding_dates: lista dat posiedzenia
+
+        Returns:
+            True jeśli wszystkie daty są w przyszłości
+        """
+        if not proceeding_dates:
+            return False
+
+        # Jeśli wszystkie daty są w przyszłości, pomiń
+        future_dates = [d for d in proceeding_dates if self._is_date_in_future(d)]
+        return len(future_dates) == len(proceeding_dates)
 
     def scrape_term(self, term: int = DEFAULT_TERM, download_pdfs: bool = True,
                     download_statements: bool = False) -> Dict:
@@ -55,11 +92,21 @@ class SejmScraper:
             logger.error(f"Nie można pobrać listy posiedzeń dla kadencji {term}")
             return self.stats
 
-        logger.info(f"Znaleziono {len(proceedings)} posiedzeń")
+        # Filtruj duplikaty i utwórz unikalną listę posiedzeń
+        unique_proceedings = self._filter_unique_proceedings(proceedings)
+        logger.info(f"Znaleziono {len(proceedings)} pozycji na liście, {len(unique_proceedings)} unikalnych posiedzeń")
 
         # Przetwarzaj każde posiedzenie
-        for proceeding in proceedings:
+        for proceeding in unique_proceedings:
             try:
+                # Sprawdź czy posiedzenie nie jest w przyszłości
+                proceeding_dates = proceeding.get('dates', [])
+                if self._should_skip_future_proceeding(proceeding_dates):
+                    proceeding_number = proceeding.get('number')
+                    logger.info(f"Pomijam przyszłe posiedzenie {proceeding_number} (daty: {proceeding_dates})")
+                    self.stats['future_proceedings_skipped'] += 1
+                    continue
+
                 self._process_proceeding(term, proceeding, download_pdfs, download_statements)
                 self.stats['proceedings_processed'] += 1
             except Exception as e:
@@ -68,6 +115,39 @@ class SejmScraper:
 
         self._log_final_stats()
         return self.stats
+
+    def _filter_unique_proceedings(self, proceedings: List[Dict]) -> List[Dict]:
+        """
+        Filtruje duplikaty posiedzeń na podstawie numeru posiedzenia
+
+        Args:
+            proceedings: lista wszystkich posiedzeń z API
+
+        Returns:
+            Lista unikalnych posiedzeń
+        """
+        seen_numbers = set()
+        unique_proceedings = []
+
+        for proceeding in proceedings:
+            number = proceeding.get('number')
+
+            # Pomiń posiedzenia bez numeru lub z numerem 0 (które wydają się być błędne)
+            if number is None or number == 0:
+                logger.warning(f"Pomijam posiedzenie z nieprawidłowym numerem: {number}")
+                continue
+
+            # Dodaj tylko jeśli nie widzieliśmy tego numeru wcześniej
+            if number not in seen_numbers:
+                seen_numbers.add(number)
+                unique_proceedings.append(proceeding)
+            else:
+                logger.debug(f"Pomijam duplikat posiedzenia {number}")
+
+        # Sortuj według numeru posiedzenia dla lepszego porządku
+        unique_proceedings.sort(key=lambda x: x.get('number', 0))
+
+        return unique_proceedings
 
     def scrape_specific_proceeding(self, term: int, proceeding_number: int,
                                    download_pdfs: bool = True, download_statements: bool = False) -> bool:
@@ -85,20 +165,37 @@ class SejmScraper:
         """
         logger.info(f"Scrapowanie posiedzenia {proceeding_number} z kadencji {term}")
 
+        # Sprawdź czy numer posiedzenia jest poprawny
+        if proceeding_number <= 0:
+            logger.error(f"Nieprawidłowy numer posiedzenia: {proceeding_number}")
+            return False
+
         # Znajdź posiedzenie o danym numerze
         proceedings = self.api.get_proceedings(term)
         if not proceedings:
             logger.error(f"Nie można pobrać listy posiedzeń dla kadencji {term}")
             return False
 
+        # Przefiltruj unikalne posiedzenia
+        unique_proceedings = self._filter_unique_proceedings(proceedings)
+
         target_proceeding = None
-        for proceeding in proceedings:
+        for proceeding in unique_proceedings:
             if proceeding.get('number') == proceeding_number:
                 target_proceeding = proceeding
                 break
 
         if not target_proceeding:
             logger.error(f"Nie znaleziono posiedzenia {proceeding_number} w kadencji {term}")
+            logger.info(f"Dostępne posiedzenia: {[p.get('number') for p in unique_proceedings]}")
+            return False
+
+        # Sprawdź czy posiedzenie nie jest w przyszłości
+        proceeding_dates = target_proceeding.get('dates', [])
+        if self._should_skip_future_proceeding(proceeding_dates):
+            logger.warning(f"Posiedzenie {proceeding_number} jest zaplanowane na przyszłość (daty: {proceeding_dates})")
+            logger.warning("Stenogramy będą dostępne dopiero po zakończeniu posiedzenia")
+            self.stats['future_proceedings_skipped'] += 1
             return False
 
         try:
@@ -140,10 +237,22 @@ class SejmScraper:
             logger.warning(f"Brak dat dla posiedzenia {proceeding_number}")
             return
 
-        logger.info(f"Posiedzenie {proceeding_number} trwało {len(dates)} dni: {dates}")
+        # Filtruj tylko przeszłe daty
+        past_dates = [d for d in dates if not self._is_date_in_future(d)]
+        future_dates = [d for d in dates if self._is_date_in_future(d)]
 
-        # Przetwarzaj każdy dzień posiedzenia
-        for date in dates:
+        if future_dates:
+            logger.info(
+                f"Posiedzenie {proceeding_number}: {len(past_dates)} dni w przeszłości, {len(future_dates)} dni w przyszłości")
+        else:
+            logger.info(f"Posiedzenie {proceeding_number} trwało {len(dates)} dni: {dates}")
+
+        if not past_dates:
+            logger.info(f"Wszystkie daty posiedzenia {proceeding_number} są w przyszłości - pomijam")
+            return
+
+        # Przetwarzaj tylko przeszłe dni posiedzenia
+        for date in past_dates:
             self._process_proceeding_day(term, proceeding_number, date,
                                          detailed_info, download_pdfs, download_statements)
 
@@ -186,11 +295,19 @@ class SejmScraper:
                 else:
                     logger.warning(f"Nie udało się zapisać PDF dla {date}")
             else:
-                logger.warning(f"Brak treści PDF dla {date}")
+                # To może być normalne dla przyszłych dat
+                if self._is_date_in_future(date):
+                    logger.debug(f"PDF dla przyszłej daty {date} nie jest jeszcze dostępny")
+                else:
+                    logger.warning(f"Brak treści PDF dla {date}")
 
         except Exception as e:
-            logger.error(f"Błąd pobierania PDF dla {date}: {e}")
-            self.stats['errors'] += 1
+            # Nie liczymy błędów 404 dla przyszłych dat jako prawdziwych błędów
+            if "404" in str(e) and self._is_date_in_future(date):
+                logger.debug(f"PDF dla przyszłej daty {date} nie jest jeszcze dostępny (404)")
+            else:
+                logger.error(f"Błąd pobierania PDF dla {date}: {e}")
+                self.stats['errors'] += 1
 
     def _download_html_statements(self, term: int, proceeding_id: int, date: str, proceeding_info: Dict):
         """Pobiera wypowiedzi HTML dla danego dnia"""
@@ -209,16 +326,24 @@ class SejmScraper:
                 else:
                     logger.warning(f"Nie udało się zapisać wypowiedzi dla {date}")
             else:
-                logger.warning(f"Brak wypowiedzi dla {date}")
+                if self._is_date_in_future(date):
+                    logger.debug(f"Wypowiedzi dla przyszłej daty {date} nie są jeszcze dostępne")
+                else:
+                    logger.warning(f"Brak wypowiedzi dla {date}")
 
         except Exception as e:
-            logger.error(f"Błąd pobierania wypowiedzi HTML dla {date}: {e}")
-            self.stats['errors'] += 1
+            # Nie liczymy błędów 404 dla przyszłych dat jako prawdziwych błędów
+            if "404" in str(e) and self._is_date_in_future(date):
+                logger.debug(f"Wypowiedzi dla przyszłej daty {date} nie są jeszcze dostępne (404)")
+            else:
+                logger.error(f"Błąd pobierania wypowiedzi HTML dla {date}: {e}")
+                self.stats['errors'] += 1
 
     def _log_final_stats(self):
         """Loguje końcowe statystyki"""
         logger.info("=== STATYSTYKI KOŃCOWE ===")
         logger.info(f"Przetworzone posiedzenia: {self.stats['proceedings_processed']}")
+        logger.info(f"Pominięte przyszłe posiedzenia: {self.stats['future_proceedings_skipped']}")
         logger.info(f"Pobrane PDF-y: {self.stats['pdfs_downloaded']}")
         logger.info(f"Zapisane wypowiedzi: {self.stats['statements_saved']}")
         logger.info(f"Błędy: {self.stats['errors']}")
@@ -247,13 +372,20 @@ class SejmScraper:
         if not proceedings:
             return None
 
+        # Filtruj duplikaty również w podsumowaniu
+        unique_proceedings = self._filter_unique_proceedings(proceedings)
+
         summary = []
-        for proc in proceedings:
+        for proc in unique_proceedings:
+            proc_dates = proc.get('dates', [])
+            is_future = self._should_skip_future_proceeding(proc_dates)
+
             summary.append({
                 'number': proc.get('number'),
                 'title': proc.get('title', ''),
-                'dates': proc.get('dates', []),
-                'current': proc.get('current', False)
+                'dates': proc_dates,
+                'current': proc.get('current', False),
+                'is_future': is_future
             })
 
         return summary
