@@ -3,6 +3,7 @@
 # =========
 stenogramy_sejm
 logs
+scheduler_state.json
 
 
 # =============================
