@@ -1,298 +1,153 @@
-# API Sejmu RP - Przewodnik dla SejmBot
-
-## Podstawowe informacje
+# API Sejmu RP - SejmBot Scraper
 
 **Base URL:** `https://api.sejm.gov.pl/`
 
-**Format odpowiedzi:** JSON
+## Podstawowe endpointy
 
-**Ograniczenia:** Brak oficjalnych limitów, ale zalecane opóźnienie 1s między zapytaniami
-
-## Kluczowe endpointy dla scrapera
-
-### 1. Lista kadencji
-
+### Kadencje
 ```
 GET /sejm/term
+GET /sejm/term{term}
 ```
 
-**Odpowiedź:**
-
-```json
-[
-  {
-    "num": 10,
-    "from": "2023-11-13",
-    "to": null,
-    "current": true
-  },
-  {
-    "num": 9,
-    "from": "2019-11-12",
-    "to": "2023-11-12",
-    "current": false
-  }
-]
-```
-
-### 2. Lista posiedzeń dla kadencji
-
+### Posiedzenia
 ```
 GET /sejm/term{term}/proceedings
-```
-
-**Parametry:**
-
-- `term` (int) - numer kadencji (np. 10)
-
-**Przykład:** `/sejm/term10/proceedings`
-
-**Odpowiedź:**
-
-```json
-[
-  {
-    "number": 1,
-    "title": "1. Posiedzenie Sejmu RP w dniach 13, 14, 15 listopada 2023 r.",
-    "dates": [
-      "2023-11-13",
-      "2023-11-14",
-      "2023-11-15"
-    ],
-    "current": false
-  }
-]
-```
-
-### 3. Szczegóły posiedzenia
-
-```
+GET /sejm/term{term}/proceedings/current
 GET /sejm/term{term}/proceedings/{id}
 ```
 
-**Parametry:**
+## Transkrypty i wypowiedzi
 
-- `term` (int) - numer kadencji
-- `id` (int) - numer posiedzenia
-
-**Przykład:** `/sejm/term10/proceedings/1`
-
-### 4. 🎯 **TRANSKRYPTY PDF** - Najważniejsze dla SejmBot
-
+### PDF transkryptów (główne)
 ```
 GET /sejm/term{term}/proceedings/{id}/{date}/transcripts/pdf
 ```
 
-**Parametry:**
-
-- `term` (int) - numer kadencji
-- `id` (int) - numer posiedzenia
-- `date` (YYYY-MM-DD) - data posiedzenia
-
-**Przykład:** `/sejm/term10/proceedings/1/2023-11-13/transcripts/pdf`
-
-**Zwraca:** Plik PDF ze stenogramem całego dnia posiedzenia
-
-### 5. Lista wypowiedzi (metadane)
-
+### Metadane wypowiedzi
 ```
 GET /sejm/term{term}/proceedings/{id}/{date}/transcripts
 ```
 
-**Odpowiedź:**
-
-```json
-{
-  "proceedingNum": 1,
-  "date": "2023-11-13",
-  "statements": [
-    {
-      "num": 1,
-      "function": "Marszałek Sejmu",
-      "name": "Szymon Hołownia",
-      "memberID": 123,
-      "startDateTime": "2023-11-13T10:00:00",
-      "endDateTime": "2023-11-13T10:05:00",
-      "unspoken": false
-    }
-  ]
-}
-```
-
-### 6. Pojedyncza wypowiedź HTML
-
+### Pojedyncza wypowiedź HTML
 ```
 GET /sejm/term{term}/proceedings/{id}/{date}/transcripts/{statementNum}
 ```
 
-**Parametry:**
+## Posłowie i kluby
 
-- `statementNum` (int) - numer wypowiedzi
-
-**Przykład:** `/sejm/term10/proceedings/1/2023-11-13/transcripts/15`
-
-**Zwraca:** HTML z treścią wypowiedzi
-
-### 7. Aktualne posiedzenie
-
-```
-GET /sejm/term{term}/proceedings/current
-```
-
-**Użycie:** Sprawdzenie czy trwa posiedzenie, pobieranie najnowszych danych
-
-## Strategia scrapowania dla SejmBot
-
-### Algorytm pobierania transkryptów:
-
-1. **Sprawdź dostępne kadencje** - `/sejm/term`
-2. **Pobierz listę posiedzeń** - `/sejm/term{term}/proceedings`
-3. **Dla każdego posiedzenia:**
-    - Pobierz szczegóły posiedzenia
-    - **Dla każdej daty posiedzenia:**
-        - **Pobierz PDF transkryptu** 📄
-        - Opcjonalnie: pobierz metadane wypowiedzi
-
-### Przykład implementacji:
-
-```python
-import requests
-import time
-
-BASE_URL = "https://api.sejm.gov.pl"
-
-
-def download_transcript_pdf(term, proceeding_id, date, save_path):
-    """Pobiera PDF transkryptu z konkretnego dnia posiedzenia"""
-    url = f"{BASE_URL}/sejm/term{term}/proceedings/{proceeding_id}/{date}/transcripts/pdf"
-
-    response = requests.get(url, timeout=30)
-
-    if response.status_code == 200:
-        filename = f"transkrypt_T{term}_P{proceeding_id}_{date}.pdf"
-        filepath = f"{save_path}/{filename}"
-
-        with open(filepath, 'wb') as f:
-            f.write(response.content)
-
-        return filepath
-    else:
-        print(f"Błąd {response.status_code}: {url}")
-        return None
-
-
-def get_proceedings_for_term(term):
-    """Pobiera listę wszystkich posiedzeń dla kadencji"""
-    url = f"{BASE_URL}/sejm/term{term}/proceedings"
-    response = requests.get(url)
-
-    if response.status_code == 200:
-        return response.json()
-    return []
-
-
-# Przykład użycia
-term = 10
-proceedings = get_proceedings_for_term(term)
-
-for proceeding in proceedings:
-    proc_id = proceeding['number']
-    dates = proceeding['dates']
-
-    for date in dates:
-        print(f"Pobieram: kadencja {term}, posiedzenie {proc_id}, dzień {date}")
-
-        pdf_path = download_transcript_pdf(term, proc_id, date, "transkrypty")
-
-        if pdf_path:
-            print(f"✅ Zapisano: {pdf_path}")
-
-        # Rate limiting - ważne!
-        time.sleep(1)
-```
-
-## Dodatkowe przydatne endpointy
-
-### Informacje o posłach
-
+### Posłowie
 ```
 GET /sejm/term{term}/MP
 GET /sejm/term{term}/MP/{id}
+GET /sejm/term{term}/MP/{id}/photo
 ```
 
-**Zastosowanie:** Identyfikacja mówców w transkryptach, dodatkowe metadane
-
 ### Kluby parlamentarne
-
 ```
 GET /sejm/term{term}/clubs
 GET /sejm/term{term}/clubs/{id}
+GET /sejm/term{term}/clubs/{id}/logo
 ```
 
-**Zastosowanie:** Klasyfikacja wypowiedzi według przynależności politycznej
+## Głosowania
 
-### Głosowania
-
+### Lista głosowań
 ```
+GET /sejm/term{term}/votings
 GET /sejm/term{term}/votings/{sitting}
 GET /sejm/term{term}/votings/{sitting}/{num}
+GET /sejm/term{term}/votings/search
 ```
 
-**Zastosowanie:** Kontekst dla wypowiedzi, dodatkowe źródło "dramatycznych momentów"
-
-## Struktura folderów dla scrapera
-
+### Statystyki głosowań posła
 ```
-transkrypty_sejm/
-├── kadencja_10/
-│   ├── posiedzenie_001/
-│   │   ├── 2023-11-13_transkrypt.pdf
-│   │   ├── 2023-11-14_transkrypt.pdf
-│   │   └── metadata.json
-│   └── posiedzenie_002/
-│       └── ...
-└── kadencja_9/
-    └── ...
+GET /sejm/term{term}/MP/{id}/votings/stats
+GET /sejm/term{term}/MP/{id}/votings/{sitting}/{date}
 ```
 
-## Najlepsze praktyki
+## Komisje
 
-1. **Rate Limiting:** 1 sekunda między zapytaniami minimum
-2. **Error Handling:** API może być niedostępne, timeout 30s
-3. **Incremental Updates:** Sprawdzaj `lastModified` w metadanych
-4. **Caching:** PDF-y się nie zmieniają, pobierz raz
-5. **Logging:** Loguj wszystkie operacje dla debugowania
-
-## Potencjalne rozszerzenia
-
-- **Interpelacje** (`/interpellations`) - dodatkowe źródło "śmiesznych" treści
-- **Komisje** (`/committees`) - posiedzenia komisji też mają transkrypty
-- **Druki sejmowe** (`/prints`) - projekty ustaw z kontekstem
-
-## Format danych dla SejmBot
-
-Po pobraniu PDF-ów, przekaż je do detektora fragmentów:
-
-```python
-from SejmBotDetektor.detector import FragmentDetector
-
-detector = FragmentDetector()
-results = detector.process_folder("transkrypty_sejm/kadencja_10/")
+### Lista komisji
+```
+GET /sejm/term{term}/committees
+GET /sejm/term{term}/committees/{code}
 ```
 
-## Monitorowanie nowych posiedzeń
-
-```python
-def check_for_new_proceedings():
-    current_proceeding = requests.get(f"{BASE_URL}/sejm/term10/proceedings/current")
-
-    if current_proceeding.status_code == 200:
-        proc_data = current_proceeding.json()
-        # Sprawdź czy to nowe posiedzenie
-        # Pobierz transkrypty gdy się zakończy
+### Posiedzenia komisji
+```
+GET /sejm/term{term}/committees/{code}/sittings
+GET /sejm/term{term}/committees/{code}/sittings/{num}
+GET /sejm/term{term}/committees/sittings/{date}
 ```
 
----
+### Transkrypty komisji
+```
+GET /sejm/term{term}/committees/{code}/sittings/{num}/html
+GET /sejm/term{term}/committees/{code}/sittings/{num}/pdf
+```
 
-**Uwaga:** API Sejmu RP jest publiczne i darmowe, ale używaj go odpowiedzialnie. Wszystkie transkrypty są w domenie
-publicznej.
+## Interpelacje i zapytania
+
+### Interpelacje
+```
+GET /sejm/term{term}/interpellations
+GET /sejm/term{term}/interpellations/{num}
+GET /sejm/term{term}/interpellations/{num}/body
+```
+
+### Zapytania pisemne
+```
+GET /sejm/term{term}/writtenQuestions
+GET /sejm/term{term}/writtenQuestions/{num}
+GET /sejm/term{term}/writtenQuestions/{num}/body
+```
+
+## Druki i procesy legislacyjne
+
+### Druki sejmowe
+```
+GET /sejm/term{term}/prints
+GET /sejm/term{term}/prints/{num}
+GET /sejm/term{term}/prints/{num}/{attach_name}
+```
+
+### Procesy legislacyjne
+```
+GET /sejm/term{term}/processes
+GET /sejm/term{term}/processes/passed
+GET /sejm/term{term}/processes/{num}
+```
+
+## Wideo
+
+### Transmisje wideo
+```
+GET /sejm/term{term}/videos
+GET /sejm/term{term}/videos/today
+GET /sejm/term{term}/videos/{date}
+GET /sejm/term{term}/videos/{unid}
+```
+
+## Parametry URL
+
+- `{term}` - numer kadencji (np. 10)
+- `{id}` - numer posiedzenia
+- `{date}` - data w formacie YYYY-MM-DD
+- `{num}` - numer elementu
+- `{code}` - kod komisji
+- `{sitting}` - numer posiedzenia
+
+## Parametry query
+
+Większość endpointów wspiera:
+- `limit` - maksymalna liczba wyników (domyślnie 50)
+- `offset` - przesunięcie w wynikach
+- `sort_by` - sortowanie (dodaj `-` dla malejącego)
+- `since` / `till` - filtrowanie dat
+- `modifiedSince` - tylko zmienione od daty
+
+## Uwagi techniczne
+
+- Format daty: YYYY-MM-DD
+- Format datetime: YYYY-MM-DDTHH:mm:ss
