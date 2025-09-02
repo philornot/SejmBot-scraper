@@ -1,30 +1,42 @@
-# SejmBotScraper 🏛️
+# SejmBot-scraper
 
-Narzędzie do automatycznego pobierania stenogramów z posiedzeń Sejmu Rzeczypospolitej Polskiej za pomocą oficjalnego
-API.
+Narzędzie do automatycznego pobierania stenogramów z posiedzeń Sejmu Rzeczypospolitej Polskiej za pomocą
+oficjalnego API. Stworzony jako część projektu **SejmBot** — systemu wykrywającego śmieszne momenty z polskiego
+parlamentu.
 
 ## Opis
 
-SejmBotScraper wykorzystuje oficjalne API Sejmu RP do pobierania:
+SejmBot-scraper wykorzystuje oficjalne API Sejmu RP do pobierania:
 
 - Stenogramów w formacie PDF z całych dni posiedzeń
 - Poszczególnych wypowiedzi w formacie HTML
 - Metadanych dotyczących posiedzeń i wypowiedzi
 
-Program automatycznie organizuje pobrane pliki w przejrzystą strukturę folderów.
+Program automatycznie organizuje pobrane pliki w przejrzystą strukturę folderów i jest przygotowany do integracji z
+systemami automatyzacji.
 
 ## Struktura projektu
 
 ```
-SejmBotScraper/
+SejmBot-scraper/
 ├── main.py              # Główny plik uruchamiający
 ├── sejm_api.py          # Komunikacja z API Sejmu
 ├── scraper.py           # Główna logika scrapowania
 ├── file_manager.py      # Zarządzanie plikami i folderami
 ├── config.py            # Konfiguracja programu
+├── API.md               # Dokumentacja API Sejmu RP
 ├── requirements.txt     # Zależności Python
 └── README.md           # Ta dokumentacja
 ```
+
+## Funkcje
+
+- **Inteligentne filtrowanie**: Automatycznie pomija duplikaty i przyszłe posiedzenia
+- **Szczegółowe statystyki**: Raportuje postęp, błędy, pominięte posiedzenia
+- **Metadane**: Zapisuje strukturalne informacje o posiedzeniach w JSON
+- **Obsługa błędów**: Rozróżnia błędy rzeczywiste od normalnych braków danych
+- **Production-ready**: Robust error handling, rate limiting, szczegółowe logowanie
+- **CLI z wieloma opcjami**: Elastyczne konfigurowanie pobierania
 
 ## Użycie
 
@@ -75,7 +87,7 @@ Program tworzy następującą strukturę folderów:
 stenogramy_sejm/
 └── kadencja_10/
     ├── posiedzenie_001_2023-11-13/
-    │   ├── info_posiedzenia.json
+    │   ├── info_posiedzenia.json      # Metadane posiedzenia
     │   ├── transkrypt_2023-11-13.pdf
     │   ├── transkrypt_2023-11-14.pdf
     │   └── wypowiedzi_2023-11-13/
@@ -85,6 +97,15 @@ stenogramy_sejm/
     └── posiedzenie_002_2023-11-20/
         └── ...
 ```
+
+## Automatyzacja
+
+SejmBot-scraper jest przygotowany do integracji z systemami automatyzacji:
+
+- **Kompatybilny z cron jobs**: Szczegółowe logi, return codes
+- **Built-in scheduler**: (w rozwoju)
+- **Monitorowanie**: Statystyki i logi dla automatycznych uruchomień
+- **Rate limiting**: Wbudowane opóźnienia chroniące API Sejmu
 
 ## Opcje konfiguracji
 
@@ -101,7 +122,7 @@ Program używa oficjalnego API Sejmu dostępnego pod adresem:
 
 - https://api.sejm.gov.pl/
 
-Dokumentacja API: [Oficjalna dokumentacja](https://api.sejm.gov.pl/)
+Szczegółowy opis przydatnych endpointów: [API.md](API.md)
 
 ### Wykorzystywane endpointy:
 
@@ -128,22 +149,53 @@ python main.py -t 10 -p 15
 python main.py -t 10 -p 23
 ```
 
-### Sprawdzenie dostępnych kadencji
+### Sprawdzenie dostępnych kadencji i posiedzeń
 
 ```bash
 python main.py --list-terms
+python main.py -t 10 --summary
 ```
 
-## Logowanie
+### Automatyczne uruchomienie (cron example)
 
-Program automatycznie loguje wszystkie operacje:
+```bash
+# Codziennie o 22:00 - pobierz najnowsze stenogramy
+0 22 * * * cd /path/to/SejmBot-scraper && python main.py -v --log-file "auto_$(date +\%Y\%m\%d).log"
+```
 
-- INFO: Podstawowe informacje o postępie
-- DEBUG: Szczegółowe informacje (z opcją `-v`)
-- ERROR: Błędy podczas pobierania
-- WARNING: Ostrzeżenia o brakujących danych
+## Logowanie i statystyki
 
-Logi można zapisać do pliku opcją `--log-file`.
+Program automatycznie loguje wszystkie operacje i generuje szczegółowe statystyki:
+
+### Poziomy logów:
+
+- **INFO**: Podstawowe informacje o postępie
+- **DEBUG**: Szczegółowe informacje (z opcją `-v`)
+- **ERROR**: Błędy podczas pobierania
+- **WARNING**: Ostrzeżenia o brakujących danych
+
+### Statystyki końcowe:
+
+```
+📊 PODSUMOWANIE POBIERANIA KADENCJI 10
+==================================================
+Przetworzone posiedzenia: 25
+Pominięte przyszłe posiedzenia: 3
+Pobrane PDF-y:           45
+Zapisane wypowiedzi:     1250
+Błędy:                   0
+==================================================
+```
+
+## Powiązane projekty
+
+Pobrane stenogramy są następnie przetwarzane przez inne komponenty SejmBot w celu:
+
+- Wykrywania fragmentów o potencjale humorystycznym
+- Analizy AI pod kątem śmieszności (OpenAI/Claude)
+- Generowania powiadomień mobilnych dla użytkowników końcowych
+
+SejmBot-scraper może być również używany niezależnie przez każdego, kto potrzebuje dostępu do stenogramów Sejmu RP.
 
 ## Ograniczenia i uwagi
 
@@ -151,12 +203,15 @@ Logi można zapisać do pliku opcją `--log-file`.
 
 2. **Rozmiar danych**: Pełna kadencja może zajmować kilka GB przestrzeni dyskowej.
 
-3. **Format HTML wypowiedzi**: Poszczególne wypowiedzi zawierają tylko metadane. Pełna treść wymaga dodatkowych zapytań
-   do API.
+3. **Przyszłe posiedzenia**: Automatycznie pomija posiedzenia zaplanowane na przyszłość (stenogramy nie są jeszcze
+   dostępne).
 
-4. **Dostępność API**: Program zależy od dostępności oficjalnego API Sejmu.
+4. **Format HTML wypowiedzi**: Poszczególne wypowiedzi zawierają metadane i template. Pełna treść wymaga dodatkowych
+   zapytań do API.
 
+5. **Dostępność API**: Program zależy od dostępności oficjalnego API Sejmu.
 
 ## Licencja
 
-Program wykorzystuje publiczne API Sejmu RP zgodnie z jego regulaminem. [Oprogramowanie na licencji Apache 2.0](https://github.com/philornot/SejmBot-scraper/blob/main/LICENSE).
+Program wykorzystuje publiczne API Sejmu RP zgodnie z jego
+regulaminem. [Oprogramowanie na licencji Apache 2.0](https://github.com/philornot/SejmBot-scraper/blob/main/LICENSE).
